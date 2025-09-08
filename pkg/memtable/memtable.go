@@ -21,7 +21,6 @@ type MemTable interface {
 // memTable implements MemTable using huandu/skiplist
 type memTable struct {
 	skiplist *skiplist.SkipList
-	size     int
 	maxSize  int
 	mu       sync.RWMutex
 }
@@ -33,7 +32,6 @@ func NewMemTable(maxSize int) MemTable {
 
 	return &memTable{
 		skiplist: sl,
-		size:     0,
 		maxSize:  maxSize,
 	}
 }
@@ -47,14 +45,7 @@ func (sl *memTable) Put(key []byte, value []byte) error {
 
 	// Check if key already exists
 	keyStr := string(key)
-	if sl.skiplist.Get(keyStr) != nil {
-		// Update existing entry
-		sl.skiplist.Set(keyStr, entry)
-	} else {
-		// Insert new entry
-		sl.skiplist.Set(keyStr, entry)
-		sl.size++
-	}
+	sl.skiplist.Set(keyStr, entry)
 
 	return nil
 }
@@ -86,17 +77,8 @@ func (sl *memTable) Delete(key []byte) error {
 
 	keyStr := string(key)
 
-	// Check if key exists
-	if sl.skiplist.Get(keyStr) == nil {
-		// Key doesn't exist, create delete marker
-		deleteEntry := types.NewDeleteEntry(key)
-		sl.skiplist.Set(keyStr, deleteEntry)
-		sl.size++
-	} else {
-		// Key exists, mark as deleted
-		deleteEntry := types.NewDeleteEntry(key)
-		sl.skiplist.Set(keyStr, deleteEntry)
-	}
+	deleteEntry := types.NewDeleteEntry(key)
+	sl.skiplist.Set(keyStr, deleteEntry)
 
 	return nil
 }
@@ -105,14 +87,14 @@ func (sl *memTable) Delete(key []byte) error {
 func (sl *memTable) Size() int {
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
-	return sl.size
+	return sl.skiplist.Len()
 }
 
 // IsFull checks if the memtable has reached its maximum size
 func (sl *memTable) IsFull() bool {
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
-	return sl.size >= sl.maxSize
+	return sl.skiplist.Len() >= sl.maxSize
 }
 
 // Clear removes all entries from the memtable
@@ -122,7 +104,6 @@ func (sl *memTable) Clear() error {
 
 	// Create new skiplist
 	sl.skiplist = skiplist.New(skiplist.String)
-	sl.size = 0
 	return nil
 }
 
@@ -132,44 +113,4 @@ func (sl *memTable) Iterator() iterator.Iterator[*types.Entry] {
 		memtable: sl,
 		current:  sl.skiplist.Front(),
 	}
-}
-
-// Iterator implements MemTableIterator
-type Iterator struct {
-	memtable *memTable
-	current  *skiplist.Element
-	started  bool
-}
-
-// Next moves the iterator to the next entry
-func (iter *Iterator) Next() bool {
-	if !iter.started {
-		iter.started = true
-		return iter.current != nil
-	}
-	if iter.current == nil {
-		return false
-	}
-	iter.current = iter.current.Next()
-	return iter.current != nil
-}
-
-// Entry returns the current entry
-func (iter *Iterator) Entry() *types.Entry {
-	if iter.current == nil {
-		return nil
-	}
-
-	entry, ok := iter.current.Value.(*types.Entry)
-	if !ok {
-		return nil
-	}
-
-	return entry
-}
-
-// Close closes the iterator
-func (iter *Iterator) Close() error {
-	iter.current = nil
-	return nil
 }
