@@ -28,7 +28,7 @@ type memTable struct {
 // NewSkipListMemTable creates a new skip list memtable
 func NewMemTable(maxSize int) MemTable {
 	// Create skiplist with string comparison
-	sl := skiplist.New(skiplist.String)
+	sl := skiplist.New(skiplist.Bytes)
 
 	return &memTable{
 		skiplist: sl,
@@ -44,8 +44,7 @@ func (sl *memTable) Put(key []byte, value []byte) error {
 	entry := types.NewEntry(key, value)
 
 	// Check if key already exists
-	keyStr := string(key)
-	sl.skiplist.Set(keyStr, entry)
+	sl.skiplist.Set(key, entry)
 
 	return nil
 }
@@ -55,8 +54,7 @@ func (sl *memTable) Get(key []byte) (*types.Entry, error) {
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
 
-	keyStr := string(key)
-	elem := sl.skiplist.Get(keyStr)
+	elem := sl.skiplist.Get(key)
 
 	if elem == nil {
 		return nil, nil
@@ -75,10 +73,8 @@ func (sl *memTable) Delete(key []byte) error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
-	keyStr := string(key)
-
 	deleteEntry := types.NewDeleteEntry(key)
-	sl.skiplist.Set(keyStr, deleteEntry)
+	sl.skiplist.Set(key, deleteEntry)
 
 	return nil
 }
