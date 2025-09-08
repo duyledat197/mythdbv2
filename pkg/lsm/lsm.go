@@ -6,18 +6,18 @@ import (
 	"container/list"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
 	"mythdb/manifest"
 	"mythdb/pkg/iterator"
 	"mythdb/pkg/memtable"
 	priorityqueue "mythdb/pkg/priority_queue"
 	"mythdb/pkg/sstable"
-
 	"mythdb/pkg/types"
 	"mythdb/pkg/wal"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 // Config holds LSM tree configuration
@@ -161,7 +161,7 @@ func (l *LSM) Get(ctx context.Context, key []byte) (*types.Entry, error) {
 
 	// Search in SSTables (from newest to oldest)
 	levels := l.manifest.GetLevels()
-	for level := range levels {
+	for _, level := range levels {
 		sstables := l.manifest.GetSSTables(level)
 
 		// Search in reverse order (newest first)
@@ -417,7 +417,13 @@ func (l *LSM) compactLevel(fromLevel, toLevel int) error {
 		return fmt.Errorf("failed to create new SSTable: %w", err)
 	}
 
-	// Remove old SSTables from manifest
+	// Add new SSTable to manifest first to avoid transient read gaps
+	if err := l.manifest.AddSSTable(toLevel, newSSTable); err != nil {
+		newSSTable.Close()
+		return fmt.Errorf("failed to add new SSTable: %w", err)
+	}
+
+	// Now remove old SSTables from manifest
 	// Remove source level SSTables
 	for _, oldSSTable := range allSSTables {
 		if err := l.manifest.RemoveSSTable(fromLevel, oldSSTable); err != nil {
@@ -434,12 +440,6 @@ func (l *LSM) compactLevel(fromLevel, toLevel int) error {
 			return fmt.Errorf("failed to remove overlapping SSTable from level %d: %w", toLevel, err)
 		}
 		oldSSTable.Close()
-	}
-
-	// Add new SSTable to manifest
-	if err := l.manifest.AddSSTable(toLevel, newSSTable); err != nil {
-		newSSTable.Close()
-		return fmt.Errorf("failed to add new SSTable: %w", err)
 	}
 
 	return nil

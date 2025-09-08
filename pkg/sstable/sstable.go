@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"mythdb/pkg/iterator"
-	"mythdb/pkg/types"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 
 	"github.com/bits-and-blooms/bloom/v3"
+
+	"mythdb/pkg/iterator"
+	"mythdb/pkg/types"
 )
 
 type SSTable interface {
@@ -146,6 +147,12 @@ func NewSSTable(path string, entriesList *list.List) (SSTable, error) {
 		entryIndex++
 	}
 
+	// Ensure all entry bytes are flushed before capturing offsets
+	if err := writer.Flush(); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to flush entries before offsets: %w", err)
+	}
+
 	// Write Bloom Filter at the end
 	bloomOffset, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -158,6 +165,12 @@ func NewSSTable(path string, entriesList *list.List) (SSTable, error) {
 		return nil, fmt.Errorf("failed to write bloom filter: %w", err)
 	}
 
+	// Flush bloom filter bytes to ensure accurate index offset
+	if err := writer.Flush(); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to flush bloom filter: %w", err)
+	}
+
 	// Write index at the end
 	indexOffset, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -168,6 +181,12 @@ func NewSSTable(path string, entriesList *list.List) (SSTable, error) {
 	if err := writeIndex(writer, index); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("failed to write index: %w", err)
+	}
+
+	// Flush index bytes to ensure offsets trailer is appended correctly
+	if err := writer.Flush(); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to flush index: %w", err)
 	}
 
 	// Write bloom filter offset

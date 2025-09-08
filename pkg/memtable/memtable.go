@@ -1,11 +1,12 @@
 package memtable
 
 import (
-	"mythdb/pkg/iterator"
-	"mythdb/pkg/types"
 	"sync"
 
 	"github.com/huandu/skiplist"
+
+	"mythdb/pkg/iterator"
+	"mythdb/pkg/types"
 )
 
 type MemTable interface {
@@ -99,7 +100,7 @@ func (sl *memTable) Clear() error {
 	defer sl.mu.Unlock()
 
 	// Create new skiplist
-	sl.skiplist = skiplist.New(skiplist.String)
+	sl.skiplist = skiplist.New(skiplist.Bytes)
 	return nil
 }
 
