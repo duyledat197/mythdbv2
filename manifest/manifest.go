@@ -1,7 +1,8 @@
 package manifest
 
 import (
-	"encoding/json"
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"hash/crc32"
 	"mythdb/pkg/sstable"
@@ -25,11 +26,11 @@ type Manifest interface {
 
 // ManifestEntry represents an entry in the manifest
 type ManifestEntry struct {
-	Level  int    `json:"level"`
-	Path   string `json:"path"`
-	MinKey string `json:"min_key"`
-	MaxKey string `json:"max_key"`
-	Size   int64  `json:"size"`
+	Level  int
+	Path   string
+	MinKey string
+	MaxKey string
+	Size   int64
 }
 
 // manifest implements the manifest interface
@@ -156,39 +157,50 @@ func (m *manifest) GetLevels() []int {
 	return levels
 }
 
+type onDiskManifest struct {
+	Entries  map[int][]ManifestEntry
+	Checksum uint32
+}
+
 // Save saves the manifest to disk
 func (m *manifest) Save() error {
 	if m.closed {
 		return fmt.Errorf("manifest is closed")
 	}
 
-	data, err := json.Marshal(m.entries)
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
+	// Compute checksum over gob-encoded entries
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(m.entries); err != nil {
+		return fmt.Errorf("failed to gob-encode manifest entries: %w", err)
 	}
+	checksum := crc32.ChecksumIEEE(buf.Bytes())
 
-	// Calculate CRC32 checksum
-	checksum := crc32.ChecksumIEEE(data)
-
-	// Create manifest with checksum
-	manifestData := struct {
-		Data     json.RawMessage `json:"data"`
-		Checksum uint32          `json:"checksum"`
-	}{
-		Data:     data,
+	// Prepare on-disk struct
+	disk := onDiskManifest{
+		Entries:  m.entries,
 		Checksum: checksum,
 	}
 
-	// Marshal manifest with checksum
-	manifestBytes, err := json.Marshal(manifestData)
+	// Write to temporary file
+	tempPath := m.path + ".tmp"
+	file, err := os.Create(tempPath)
 	if err != nil {
-		return fmt.Errorf("failed to marshal manifest with checksum: %w", err)
+		return fmt.Errorf("failed to create temporary manifest: %w", err)
+	}
+	defer file.Close()
+
+	fileEnc := gob.NewEncoder(file)
+	if err := fileEnc.Encode(&disk); err != nil {
+		return fmt.Errorf("failed to gob-encode manifest to file: %w", err)
 	}
 
-	// Write to temporary file first
-	tempPath := m.path + ".tmp"
-	if err := os.WriteFile(tempPath, manifestBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write temporary manifest: %w", err)
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync manifest: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary manifest: %w", err)
 	}
 
 	// Atomic rename
@@ -205,35 +217,29 @@ func (m *manifest) Load() error {
 		return fmt.Errorf("manifest is closed")
 	}
 
-	data, err := os.ReadFile(m.path)
+	file, err := os.Open(m.path)
 	if err != nil {
-		return fmt.Errorf("failed to read manifest: %w", err)
+		return fmt.Errorf("failed to open manifest: %w", err)
+	}
+	defer file.Close()
+
+	dec := gob.NewDecoder(file)
+	var disk onDiskManifest
+	if err := dec.Decode(&disk); err != nil {
+		return fmt.Errorf("failed to gob-decode manifest: %w", err)
 	}
 
-	// Try to unmarshal as new format with checksum first
-	var manifestData struct {
-		Data     json.RawMessage `json:"data"`
-		Checksum uint32          `json:"checksum"`
+	// Verify checksum
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(disk.Entries); err != nil {
+		return fmt.Errorf("failed to gob-encode entries for checksum: %w", err)
+	}
+	actual := crc32.ChecksumIEEE(buf.Bytes())
+	if actual != disk.Checksum {
+		return fmt.Errorf("manifest checksum mismatch: expected %x, got %x", disk.Checksum, actual)
 	}
 
-	if err := json.Unmarshal(data, &manifestData); err == nil {
-		// Verify checksum
-		actualChecksum := crc32.ChecksumIEEE(manifestData.Data)
-		if actualChecksum != manifestData.Checksum {
-			return fmt.Errorf("manifest checksum mismatch: expected %x, got %x", manifestData.Checksum, actualChecksum)
-		}
-
-		// Unmarshal the actual data
-		if err := json.Unmarshal(manifestData.Data, &m.entries); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest data: %w", err)
-		}
-	} else {
-		// Fallback to old format without checksum
-		if err := json.Unmarshal(data, &m.entries); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest: %w", err)
-		}
-	}
-
+	m.entries = disk.Entries
 	return nil
 }
 
