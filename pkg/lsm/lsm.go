@@ -147,18 +147,6 @@ func (l *LSM) Get(ctx context.Context, key []byte) (*types.Entry, error) {
 		return entry, nil
 	}
 
-	// Check immutable memtable if it exists
-	if l.memtable != nil {
-		if entry, err := l.memtable.Get(key); err != nil {
-			return nil, fmt.Errorf("failed to get from immutable memtable: %w", err)
-		} else if entry != nil {
-			if entry.Tombstone {
-				return nil, nil // Key was deleted
-			}
-			return entry, nil
-		}
-	}
-
 	// Search in SSTables (from newest to oldest)
 	levels := l.manifest.GetLevels()
 	for _, level := range levels {
@@ -167,6 +155,9 @@ func (l *LSM) Get(ctx context.Context, key []byte) (*types.Entry, error) {
 		// Search in reverse order (newest first)
 		for j := len(sstables) - 1; j >= 0; j-- {
 			sstable := sstables[j]
+			if bytes.Compare(key, sstable.MinKey()) < 0 || bytes.Compare(key, sstable.MaxKey()) > 0 {
+				continue
+			}
 			if entry, err := sstable.Get(key); err != nil {
 				return nil, fmt.Errorf("failed to get from SSTable: %w", err)
 			} else if entry != nil {
@@ -606,7 +597,7 @@ func (l *LSM) mergeSSTablesWithPriorityQueue(sstables []sstable.SSTable) (*list.
 		return a.Index < b.Index
 	}
 	// Create priority queue
-	pq := priorityqueue.NewPriorityQueue[*sstable.IteratorItem](lessFn)
+	pq := priorityqueue.NewPriorityQueue(lessFn)
 	heap.Init(pq)
 
 	// Initialize iterators for all SSTables

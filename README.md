@@ -1,159 +1,87 @@
-# LSM Tree Implementation in Go
+# MythDB v2 - LSM Tree Implementation in Go
 
-Đây là một implementation hoàn chỉnh của cây LSM (Log-Structured Merge Tree) bằng Golang với các thành phần chính:
+MythDB là một công cụ lưu trữ key-value (storage engine) hiệu năng cao, được xây dựng dựa trên cấu trúc **Log-Structured Merge Tree (LSM Tree)** bằng ngôn ngữ Go. Dự án tập trung vào việc hiện thực hóa các khái niệm cốt lõi của hệ quản trị cơ sở dữ liệu hiện đại.
 
-## Các thành phần chính
+## 🚀 Tính năng chính
 
-### 1. KeyValue (`pkg/lsm/types.go`)
-- Đại diện cho một cặp key-value với timestamp và flag deleted
-- Hỗ trợ encoding/decoding để lưu trữ
-- So sánh key và timestamp
+- **MemTable (SkipList):** Lưu trữ tạm thời trên bộ nhớ sử dụng cấu trúc SkipList, tối ưu cho các thao tác đọc/ghi với độ phức tạp $O(\log n)$.
+- **Write-Ahead Log (WAL):** Đảm bảo tính bền vững (durability) của dữ liệu. Khôi phục trạng thái hệ thống ngay lập tức sau khi crash.
+- **SSTable (Sorted String Table):** Lưu trữ dữ liệu đã sắp xếp dưới dạng file trên đĩa cứng, tối ưu cho việc truy vấn dải (range query).
+- **Persistent Index & Bloom Filter:** Giảm thiểu thao tác I/O bằng cách sử dụng chỉ mục trên đĩa và bộ lọc Bloom (từ thư viện `bits-and-blooms/bloom`).
+- **Manifest Management:** Theo dõi và quản lý phiên bản của các SSTables trên các cấp độ khác nhau.
+- **Leveled Compaction:** Chiến lược nén dữ liệu theo tầng giúp tối ưu bộ nhớ đĩa và cải thiện hiệu suất đọc.
+- **Thread-Safety:** Hỗ trợ truy cập đa luồng an toàn bằng cơ chế `RWMutex`.
 
-### 2. SkipList (`pkg/lsm/skiplist.go`)
-- Implement skiplist cho MemTable
-- Hỗ trợ insert, get, delete với độ phức tạp O(log n) trung bình
-- Tự động tạo level ngẫu nhiên cho các node mới
+## 🛠 Cấu trúc thư mục
 
-### 3. WAL (Write-Ahead Log) (`pkg/lsm/wal.go`)
-- Ghi log tất cả thao tác trước khi thực hiện
-- Đảm bảo durability khi crash
-- Hỗ trợ replay để khôi phục trạng thái
+```text
+mythdbv2/
+├── cmd/
+│   └── main.go           # Demo ứng dụng và ví dụ sử dụng
+├── pkg/
+│   ├── lsm/              # Logic cốt lõi của LSM Tree
+│   ├── memtable/         # Hiện thực MemTable và Iterator
+│   ├── sstable/          # Quản lý file SSTable, Index và Bloom Filter
+│   ├── wal/              # Hiện thực Write-Ahead Log
+│   ├── types/            # Các kiểu dữ liệu dùng chung (Entry, v.v.)
+│   ├── manifest/         # Quản lý trạng thái các level và SSTables
+│   └── priority_queue/   # Cấu trúc hàng đợi ưu tiên dùng cho Compaction
+└── demo-data/            # Thư mục lưu trữ dữ liệu (tự động tạo)
+```
 
-### 4. MemTable (`pkg/lsm/memtable.go`)
-- Bảng trong bộ nhớ sử dụng skiplist
-- Tích hợp với WAL để đảm bảo ACID
-- Tự động flush khi đầy
+## 📖 Hướng dẫn sử dụng
 
-### 5. SSTable (`pkg/lsm/sstable.go`)
-- Bảng đã sắp xếp trên disk
-- Có index và bloom filter để tối ưu truy vấn
-- Hỗ trợ range query
+### 1. Khởi tạo Database
 
-### 6. Bloom Filter (`pkg/sstable/bloom_filter.go`)
-- Sử dụng thư viện `github.com/bits-and-blooms/bloom/v3`
-- Giảm false positive khi truy vấn
-- Tự động tối ưu kích thước và số hash functions
-
-### 7. Leveled Compaction (`pkg/lsm_tree/compaction.go`)
-- Chiến lược compaction theo level
-- Level 0: không giới hạn kích thước, giới hạn số bảng
-- Level 1+: giới hạn kích thước và số bảng
-- Tự động trigger compaction khi level đầy
-
-### 8. LSM Tree (`pkg/lsm_tree/lsm_tree.go`)
-- Kết hợp tất cả thành phần
-- Quản lý MemTable và các level
-- Hỗ trợ CRUD operations và range query
-
-## Cách sử dụng
-
-### 1. Tạo LSM Tree
 ```go
-lsmTree, err := lsm.NewLSMTree("./data")
+import (
+    "mythdb/pkg/lsm"
+    "context"
+)
+
+config := lsm.DefaultConfig()
+config.DataDir = "./my-data"
+
+db, err := lsm.NewLSM(config)
 if err != nil {
-    log.Fatal(err)
+    panic(err)
 }
-defer lsmTree.Close()
+defer db.Close()
 ```
 
-### 2. Thêm dữ liệu
+### 2. Các thao tác cơ bản
+
 ```go
-err := lsmTree.Put([]byte("key"), []byte("value"))
-if err != nil {
-    log.Printf("Failed to put: %v", err)
+ctx := context.Background()
+
+// Thêm hoặc cập nhật dữ liệu
+err := db.Put(ctx, []byte("user:100"), []byte("Antigravity AI"))
+
+// Truy vấn dữ liệu
+entry, err := db.Get(ctx, []byte("user:100"))
+if entry != nil {
+    fmt.Printf("Value: %s\n", string(entry.Value))
 }
+
+// Xóa dữ liệu (sử dụng Tombstone)
+err = db.Delete(ctx, []byte("user:100"))
 ```
 
-### 3. Lấy dữ liệu
-```go
-kv := lsmTree.Get([]byte("key"))
-if kv != nil {
-    if kv.Deleted {
-        fmt.Println("Key is deleted")
-    } else {
-        fmt.Printf("Value: %s\n", string(kv.Value))
-    }
-}
-```
+### 3. Chạy Demo
 
-### 4. Xóa dữ liệu
-```go
-err := lsmTree.Delete([]byte("key"))
-if err != nil {
-    log.Printf("Failed to delete: %v", err)
-}
-```
-
-### 5. Range Query
-```go
-kvs := lsmTree.GetRange([]byte("a"), []byte("z"))
-for _, kv := range kvs {
-    fmt.Printf("%s: %s\n", string(kv.Key), string(kv.Value))
-}
-```
-
-### 6. Thống kê
-```go
-stats := lsmTree.Stats()
-fmt.Printf("MemTable size: %d\n", stats["memtable_size"])
-```
-
-## Chạy demo
+Bạn có thể chạy thử nghiệm các tính năng thông qua file `main.go`:
 
 ```bash
-# Tạo thư mục data
-mkdir -p data
-
-# Chạy demo
 go run cmd/main.go
 ```
 
-## Cấu trúc thư mục
+## 📈 Thông số kỹ thuật
 
-```
-mythdb/
-├── pkg/
-│   ├── types.go              # KeyValue struct (shared types)
-│   ├── skiplist/
-│   │   └── skiplist.go       # SkipList implementation
-│   ├── wal/
-│   │   └── wal.go            # Write-Ahead Log
-│   ├── sstable/
-│   │   ├── bloom_filter.go   # Bloom Filter using bits-and-blooms library
-│   │   └── sstable.go        # SSTable implementation
-│   ├── memtable/
-│   │   └── memtable.go       # MemTable with skiplist
-│   └── lsm_tree/
-│       ├── compaction.go     # Leveled compaction strategy
-│       └── lsm_tree.go       # Main LSM tree
-├── cmd/
-│   └── main.go               # Demo application
-├── go.mod
-└── README.md
-```
+- **Ngôn ngữ:** Go (Golang) 1.25+
+- **Kiến trúc:** LSM Tree với Leveled Compaction.
+- **Dữ liệu:** Lưu trữ dưới dạng binary trên disk (`.sst`).
+- **Nén:** Tự động nén khi số lượng file ở Level 0 vượt ngưỡng (mặc định là 2).
 
-## Đặc điểm kỹ thuật
+## 🤝 Đóng góp
 
-- **MemTable**: Sử dụng skiplist với O(log n) trung bình
-- **WAL**: Đảm bảo durability và crash recovery
-- **SSTable**: Có index và bloom filter từ thư viện bits-and-blooms
-- **Compaction**: Leveled strategy với 10 levels
-- **Concurrency**: Thread-safe với RWMutex
-- **Persistent**: Lưu trữ trên disk với cấu trúc tối ưu
-- **Dependencies**: Sử dụng `github.com/bits-and-blooms/bloom/v3` cho bloom filter
-
-## Hiệu suất
-
-- **Write**: O(log n) cho MemTable, O(1) cho WAL
-- **Read**: O(log n) cho MemTable, O(log n) cho SSTable
-- **Compaction**: Background process, không block operations
-- **Memory**: Giới hạn bởi MemTable size
-
-## Mở rộng
-
-Có thể mở rộng thêm:
-- Compression cho SSTable
-- Multiple MemTables
-- Background compaction workers
-- Metrics và monitoring
-- Configuration management
+Mọi đóng góp (Pull Request, Issue) đều được hoan nghênh để cải thiện MythDB. Cảm ơn các bạn!
