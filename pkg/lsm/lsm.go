@@ -89,7 +89,7 @@ func NewLSM(config *Config) (*LSM, error) {
 
 	// Recover from WAL if it exists
 	if err := lsm.recoverFromWAL(); err != nil {
-		lsm.Close()
+		_ = lsm.Close()
 		return nil, fmt.Errorf("failed to recover from WAL: %w", err)
 	}
 
@@ -253,50 +253,7 @@ func (l *LSM) flushMemtable() error {
 	}
 
 	// Trigger immediate compaction after flush
-	go l.compactUnlocked()
-
-	return nil
-}
-
-// flushImmutableMemtable flushes the immutable memtable to a new SSTable
-func (l *LSM) flushMemtableStep2() error {
-	if l.memtable == nil {
-		return nil
-	}
-
-	// Collect all entries from immutable memtable into linked list
-	entriesList := list.New()
-	iter := l.memtable.Iterator()
-	defer iter.Close()
-
-	for iter.Next() {
-		entry := iter.Entry()
-		if entry != nil {
-			entriesList.PushBack(entry)
-		}
-	}
-
-	if entriesList.Len() == 0 {
-		return nil
-	}
-
-	// Create new SSTable from linked list
-	sstablePath := filepath.Join(l.config.DataDir, fmt.Sprintf("sstable_%d_%d.sst", 0, time.Now().UnixNano()))
-	sstable, err := sstable.NewSSTable(sstablePath, entriesList)
-	if err != nil {
-		return fmt.Errorf("failed to create SSTable: %w", err)
-	}
-
-	// Add to manifest
-	if err := l.manifest.AddSSTable(0, sstable); err != nil {
-		sstable.Close()
-		return fmt.Errorf("failed to add SSTable to manifest: %w", err)
-	}
-
-	// Clear immutable memtable
-	if err := l.memtable.Clear(); err != nil {
-		return fmt.Errorf("failed to clear immutable memtable: %w", err)
-	}
+	go func() { _ = l.compactUnlocked() }()
 
 	return nil
 }
@@ -322,13 +279,6 @@ func (l *LSM) recoverFromWAL() error {
 	}
 
 	return nil
-}
-
-// compact performs compaction (with lock)
-func (l *LSM) compact() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.compactUnlocked()
 }
 
 // compactUnlocked performs compaction (without lock - for internal use)
@@ -410,7 +360,7 @@ func (l *LSM) compactLevel(fromLevel, toLevel int) error {
 
 	// Add new SSTable to manifest first to avoid transient read gaps
 	if err := l.manifest.AddSSTable(toLevel, newSSTable); err != nil {
-		newSSTable.Close()
+		_ = newSSTable.Close()
 		return fmt.Errorf("failed to add new SSTable: %w", err)
 	}
 
@@ -418,19 +368,19 @@ func (l *LSM) compactLevel(fromLevel, toLevel int) error {
 	// Remove source level SSTables
 	for _, oldSSTable := range allSSTables {
 		if err := l.manifest.RemoveSSTable(fromLevel, oldSSTable); err != nil {
-			newSSTable.Close()
+			_ = newSSTable.Close()
 			return fmt.Errorf("failed to remove old SSTable from level %d: %w", fromLevel, err)
 		}
-		oldSSTable.Close()
+		_ = oldSSTable.Close()
 	}
 
 	// Remove overlapping SSTables from target level
 	for _, oldSSTable := range overlappingSSTables {
 		if err := l.manifest.RemoveSSTable(toLevel, oldSSTable); err != nil {
-			newSSTable.Close()
+			_ = newSSTable.Close()
 			return fmt.Errorf("failed to remove overlapping SSTable from level %d: %w", toLevel, err)
 		}
-		oldSSTable.Close()
+		_ = oldSSTable.Close()
 	}
 
 	return nil
@@ -659,7 +609,7 @@ func (l *LSM) mergeSSTablesWithPriorityQueue(sstables []sstable.SSTable) (*list.
 
 	// Close all iterators
 	for _, iter := range iterators {
-		iter.Close()
+		_ = iter.Close()
 	}
 
 	// Return linked list directly
@@ -689,7 +639,7 @@ func (l *LSM) flushMemtableToSSTable(m memtable.MemTable) error {
 	// Collect all entries from immutable memtable into linked list
 	entriesList := list.New()
 	iter := m.Iterator()
-	defer iter.Close()
+	defer func() { _ = iter.Close() }()
 
 	for iter.Next() {
 		entry := iter.Entry()
@@ -711,7 +661,7 @@ func (l *LSM) flushMemtableToSSTable(m memtable.MemTable) error {
 
 	// Add to manifest
 	if err := l.manifest.AddSSTable(0, sstableObj); err != nil {
-		sstableObj.Close()
+		_ = sstableObj.Close()
 		return fmt.Errorf("failed to add SSTable to manifest: %w", err)
 	}
 
