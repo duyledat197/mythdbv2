@@ -72,7 +72,7 @@ func NewLSM(config *Config) (*LSM, error) {
 	manifestPath := filepath.Join(config.DataDir, "manifest.json")
 	manifest, err := manifest.NewManifest(manifestPath)
 	if err != nil {
-		wal.Close()
+		_ = wal.Close()
 		return nil, fmt.Errorf("failed to create manifest: %w", err)
 	}
 
